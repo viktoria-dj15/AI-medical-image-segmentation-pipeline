@@ -20,3 +20,6 @@ dataset_audit.csv
 splits.json
 runs/
 outputs/
+
+# Isolated nnU-Net environment
+.venv-nnunet/

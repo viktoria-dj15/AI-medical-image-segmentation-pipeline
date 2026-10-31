@@ -2,7 +2,7 @@
 
 A research and learning project building a reproducible chest CT segmentation workflow with **Python, PyTorch, MONAI, PyCharm, and 3D Slicer**.
 
-**Current status:** dataset inspection and geometry auditing are complete. A reproducible split script is prepared. Preprocessing, model training, and quantitative model evaluation are not yet implemented. The displayed segmentations are supplied ground-truth annotations, not model predictions.
+**Current status:** the MONAI baseline has been trained and evaluated on a fixed 139/30/30 split. Best mean validation Dice is 0.3932 (30 cases, step 4000, threshold 0.5). An isolated nnU-Net environment, converted dataset, plans and a successful batch-1 MPS benchmark are ready. A short nnU-Net training launcher is included; nnU-Net lesion-training results are pending.
 
 ## Problem
 
@@ -31,7 +31,7 @@ The accompanying spreadsheet lists 199 training and 50 validation filenames, all
 
 Development uses PyCharm with Python 3.12. Slicer uses its own embedded Python environment. Run the Slicer script in **Slicer → View → Python Console**, not with the PyCharm interpreter.
 
-Observed local environment: Python 3.12.16, PyTorch 2.14.1, MONAI 1.6.1, NiBabel 5.4.2, and Slicer 5.12.4. Core package imports and a CPU 3D convolution were tested. PyTorch reported Apple MPS available when run from PyCharm on the 16 GB Apple M5 Mac; complete 3D training on MPS has not yet been benchmarked.
+Observed local environment: Python 3.12.16, PyTorch 2.14.1, MONAI 1.6.1, NiBabel 5.4.2, and Slicer 5.12.4. Core package imports and a CPU 3D convolution were tested. PyTorch reported Apple MPS available when run from PyCharm on the 16 GB Apple M5 Mac; MONAI training and a synthetic nnU-Net batch-1 training benchmark have since completed successfully on MPS.
 
 ```bash
 python3.12 -m venv .venv
@@ -86,21 +86,24 @@ The audit is a geometry and label-format check. It does not establish annotation
 
 `create_splits.py` uses sorted base case IDs and random seed **42** to assign **139 training, 30 validation, and 30 test cases**. It checks group disjointness and complete coverage, and refuses to overwrite an existing split file. The script currently expects this exact 199-case dataset with unique base IDs; it stops if that assumption changes.
 
-At the time this report was written, the script existed but no `splits.json` was present in the project folder. Therefore these assignments are prepared, not yet recorded as a completed run. The official 50-case validation subset is kept separate because its ground truth is unavailable locally.
+The split script has now been run successfully: 139 training, 30 validation, and 30 test cases, with no base-ID overlap. The resulting `splits.json` is stored locally. The official 50-case validation subset is kept separate because its ground truth is unavailable locally.
 
 `splits.json` contains machine-specific absolute paths and is excluded from Git. Preserve it locally across experiments. A future portable manifest should record relative paths and fixed case assignments for sharing across machines.
 
-## Planned work
+## Completed modeling and remaining work
 
-1. Run and preserve the split manifest. Use training data for fitting, validation for model selection, and the held-out test subset only for final evaluation.
-2. Implement paired MONAI transforms: consistent orientation, chosen target spacing, CT intensity clipping/normalization, foreground cropping, and lesion/background patch sampling. Use nearest-neighbor interpolation for masks and retain inverse spatial transforms. Choose preprocessing settings using training data only.
-3. Check transformed CT–mask overlays and run a small forward/backward training benchmark. Measure memory and runtime before choosing local MPS or a cloud CUDA GPU.
-4. Train a compact 3D U-Net from random initialization with a documented loss, optimizer, augmentation policy, random seeds, and saved checkpoints. Dice plus cross-entropy is the planned starting loss.
-5. Implement sliding-window inference and restore predictions to the original CT geometry before export.
-6. Evaluate per case using Dice, IoU, precision, recall, surface metrics, and lesion-volume error. Define behavior for empty predictions and masks. Report distributions and failure cases, not only a single average score.
-7. Import predicted masks into Slicer, compare with ground truth, and export lesion-volume tables using the binary labelmap representation. Keep surface visualization settings separate from quantitative measurement.
+Paired preprocessing, MPS forward/backward checks, controlled memorization tests,
+full-split MONAI training, whole-volume validation, inference comparisons and
+threshold analysis have completed. Best mean validation Dice is 0.3932 at threshold
+0.5; the validation-selected 0.4 threshold gives 0.3953. These are not test results.
+See [EXPERIMENT_REPORT.md](EXPERIMENT_REPORT.md) for the experiment sequence.
 
-No training losses, segmentation scores, or claimed AI performance are available yet. Future results will be added only after the corresponding experiments run.
+The nnU-Net environment, data conversion, fingerprint and default plan are ready.
+Batch 1 passed a synthetic MPS benchmark. Run the supplied training pilot next.
+Remaining work includes full nnU-Net training, restoring predictions to original
+CT geometry for final export, additional surface/volume metrics, and final test
+assessment after freezing model-selection decisions. Current quantitative outputs
+are primarily evaluated on resampled CT grids.
 
 ## Files
 
@@ -124,3 +127,28 @@ CT data are published under **CC BY 4.0**; challenge annotations are described o
 - [3D Slicer segmentation documentation](https://slicer.readthedocs.io/en/latest/user_guide/modules/segmentations.html).
 
 The annotation of the dataset was made possible through the joint work of Children's National Hospital, NVIDIA, and the National Institutes of Health for the COVID-19-20 Lung CT Lesion Segmentation Challenge.
+
+## One-case preprocessing check
+
+Run `python preprocess_one_case.py` in PyCharm. It reads only the first training entry from the saved split manifest. The initial settings are RAS orientation, 1.5 × 1.5 × 2.0 mm spacing, linear CT interpolation, nearest-neighbor label interpolation, and clipping CT intensities from −1000 to 400 HU before scaling to [0, 1]. An image-derived foreground crop is followed by sampling two 96 × 96 × 64 patches. Lesion/background center-selection probabilities are equal; a pair of samples is not guaranteed to contain one of each. Spatial transform history remains attached to MONAI MetaTensors for later inversion work.
+
+The executed case was `0267`: original shape 512 × 512 × 68 with 0.915 × 0.915 × 5.0 mm spacing, processed shape 1 × 313 × 313 × 168. Geometry, finite values, binary labels, and retained foreground checks passed. A transformed overlay was saved in `outputs/preprocessing_overlay.png` and visually inspected. These settings are development choices, not tuned parameters or evidence of segmentation performance. Resampling does not recover detail absent from the original 5 mm slices.
+
+
+## Training results and nnU-Net pilot
+
+See [the experiment report](EXPERIMENT_REPORT.md) for the controlled experiments,
+validation results, hardware benchmark and limitations.
+
+To start the nnU-Net pilot on the prepared local dataset:
+
+```bash
+"$HOME/3D segmentation + slicer/.venv-nnunet/bin/python" \
+"$HOME/3D segmentation + slicer/nnunet_setup/train_pilot.py"
+```
+
+It preprocesses the 3D configuration, trains 250 updates at batch 1, then validates.
+Use `--dry-run` to check setup, or `--resume` for an interrupted pilot.
+This shortened schedule is a feasibility pilot, not standard full nnU-Net training.
+See [nnU-Net setup](nnunet_setup/README.md). Data, caches, environments and weights
+are local only and excluded from this repository.
